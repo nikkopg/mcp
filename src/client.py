@@ -1,5 +1,35 @@
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
+from openai import OpenAI
+import json
+
+client = OpenAI(
+     base_url="http://localhost:11434/v1",
+     api_key="ollama"
+)
+
+def call_llm(functions, prompt="Explain what MXFP4 quantization is."):
+    response = client.chat.completions.create(
+        model="gpt-oss:20b",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt}
+        ],
+        tools = functions
+    )
+
+    functions_to_call = []
+
+    if response.choices:
+        for choice in response.choices:
+            if choice.message and choice.message.tool_calls:
+                for tool_call in choice.message.tool_calls:
+                    print("TOOL: ", tool_call)
+                    name = tool_call.function.name
+                    args = json.loads(tool_call.function.arguments)
+                    functions_to_call.append({ "name": name, "args": args })
+
+    return functions_to_call
 
 # Create server parameters for stdio connection
 server_params = StdioServerParameters(
@@ -22,7 +52,16 @@ async def run():
                     print("✅ Connected to MCP server successfully!")
 
                     # List available tools
-                    await list_tools(session)
+                    functions = await list_tools(session)
+                    
+                    prompt = "Add 220 to 321"
+                    # ask LLM what tools to all, if any
+                    functions_to_call = call_llm(functions, prompt)
+
+                    # call suggested functions
+                    for f in functions_to_call:
+                        result = await session.call_tool(f["name"], arguments=f["args"])
+                        print("TOOLS result: ", result.content)
                     
                     # Test calculator operations
                     await test_calculator_operations(session)
@@ -40,9 +79,14 @@ async def list_tools(session: ClientSession):
         """List all available tools on the server"""
         print("\n📋 Listing available tools:")
         try:
+            functions = []
             tools = await session.list_tools()
             for tool in tools.tools:
                 print(f"  - {tool.name}: {tool.description}")
+                print("Tool", tool.inputSchema["properties"])
+                functions.append(convert_to_llm_tool(tool))
+                return functions
+            
         except Exception as e:
             print(f"  Error listing tools: {e}")
 
